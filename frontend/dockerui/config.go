@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	buildArgPrefix = "build-arg:"
-	labelPrefix    = "label:"
+	buildArgPrefix       = "build-arg:"
+	labelPrefix          = "label:"
+	localSessionIDPrefix = "local-sessionid:"
 
 	keyTarget           = "target"
 	keyCgroupParent     = "cgroup-parent"
@@ -45,30 +46,28 @@ const (
 
 	// Don't forget to update frontend documentation if you add
 	// a new build-arg: frontend/dockerfile/docs/reference.md
-	keyCacheNSArg              = "build-arg:BUILDKIT_CACHE_MOUNT_NS"
-	keyMultiPlatformArg        = "build-arg:BUILDKIT_MULTI_PLATFORM"
-	keyHostnameArg             = "build-arg:BUILDKIT_SANDBOX_HOSTNAME"
-	keyDockerfileLintArg       = "build-arg:BUILDKIT_DOCKERFILE_CHECK"
-	keyContextKeepGitDirArg    = "build-arg:BUILDKIT_CONTEXT_KEEP_GIT_DIR"
-	keySourceDateEpoch         = "build-arg:SOURCE_DATE_EPOCH"
-	keyCopyIgnoredCheckEnabled = "build-arg:BUILDKIT_DOCKERFILE_CHECK_COPYIGNORED_EXPERIMENT"
+	keyCacheNSArg           = "build-arg:BUILDKIT_CACHE_MOUNT_NS"
+	keyMultiPlatformArg     = "build-arg:BUILDKIT_MULTI_PLATFORM"
+	keyHostnameArg          = "build-arg:BUILDKIT_SANDBOX_HOSTNAME"
+	keyDockerfileLintArg    = "build-arg:BUILDKIT_DOCKERFILE_CHECK"
+	keyContextKeepGitDirArg = "build-arg:BUILDKIT_CONTEXT_KEEP_GIT_DIR"
+	keySourceDateEpoch      = "build-arg:SOURCE_DATE_EPOCH"
 )
 
 type Config struct {
-	BuildArgs               map[string]string
-	CacheIDNamespace        string
-	CgroupParent            string
-	Epoch                   *time.Time
-	ExtraHosts              []llb.HostIP
-	Hostname                string
-	ImageResolveMode        llb.ResolveMode
-	Labels                  map[string]string
-	NetworkMode             pb.NetMode
-	ShmSize                 int64
-	Target                  string
-	Ulimits                 []pb.Ulimit
-	LinterConfig            *linter.Config
-	CopyIgnoredCheckEnabled bool
+	BuildArgs        map[string]string
+	CacheIDNamespace string
+	CgroupParent     string
+	Epoch            *time.Time
+	ExtraHosts       []llb.HostIP
+	Hostname         string
+	ImageResolveMode llb.ResolveMode
+	Labels           map[string]string
+	NetworkMode      pb.NetMode
+	ShmSize          int64
+	Target           string
+	Ulimits          []pb.Ulimit
+	LinterConfig     *linter.Config
 
 	CacheImports           []client.CacheOptionsEntry
 	TargetPlatforms        []ocispecs.Platform // nil means default
@@ -79,11 +78,19 @@ type Config struct {
 
 type Client struct {
 	Config
+<<<<<<< chore-buildkit-merge-v0.16.0-unresolved
 	client      client.Client
 	ignoreCache []string
 	g           flightcontrol.CachedGroup[*buildContext]
 	bctx        *buildContext // earth-specific: preset by SetBuildContext
 	bopts       client.BuildOpts
+=======
+	client           client.Client
+	ignoreCache      []string
+	g                flightcontrol.CachedGroup[*buildContext]
+	bopts            client.BuildOpts
+	localsSessionIDs map[string]string
+>>>>>>> v0.16.0
 
 	dockerignore     []byte
 	dockerignoreName string
@@ -290,15 +297,8 @@ func (bc *Client) init() error {
 		}
 	}
 
-	// CopyIgnoredCheckEnabled is an experimental feature to check if COPY is ignored by .dockerignore,
-	// and it is disabled by default. It is expected that this feature will be enabled by default in a future
-	// release, and this build-arg will be removed.
-	if v, ok := opts[keyCopyIgnoredCheckEnabled]; ok {
-		bc.CopyIgnoredCheckEnabled, err = strconv.ParseBool(v)
-		if err != nil {
-			return errors.Wrapf(err, "failed to parse %s", keyCopyIgnoredCheckEnabled)
-		}
-	}
+	bc.localsSessionIDs = parseLocalSessionIDs(opts)
+
 	return nil
 }
 
@@ -343,9 +343,14 @@ func (bc *Client) ReadEntrypoint(ctx context.Context, lang string, opts ...llb.L
 			filenames = append(filenames, path.Join(path.Dir(bctx.filename), strings.ToLower(DefaultDockerfileName)))
 		}
 
+		sessionID := bc.bopts.SessionID
+		if v, ok := bc.localsSessionIDs[bctx.dockerfileLocalName]; ok {
+			sessionID = v
+		}
+
 		opts = append([]llb.LocalOption{
 			llb.FollowPaths(filenames),
-			llb.SessionID(bc.bopts.SessionID),
+			llb.SessionID(sessionID),
 			llb.SharedKeyHint(bctx.dockerfileLocalName),
 			WithInternalName(name),
 			llb.Differ(llb.DiffNone, false),
@@ -439,8 +444,13 @@ func (bc *Client) MainContext(ctx context.Context, opts ...llb.LocalOption) (*ll
 		return nil, errors.Wrapf(err, "failed to read dockerignore patterns")
 	}
 
+	sessionID := bc.bopts.SessionID
+	if v, ok := bc.localsSessionIDs[bctx.contextLocalName]; ok {
+		sessionID = v
+	}
+
 	opts = append([]llb.LocalOption{
-		llb.SessionID(bc.bopts.SessionID),
+		llb.SessionID(sessionID),
 		llb.ExcludePatterns(excludes),
 		llb.SharedKeyHint(bctx.contextLocalName),
 		WithInternalName("load build context"),
@@ -512,8 +522,12 @@ func WithInternalName(name string) llb.ConstraintsOpt {
 
 func (bc *Client) dockerIgnorePatterns(ctx context.Context, bctx *buildContext) ([]string, error) {
 	if bc.dockerignore == nil {
+		sessionID := bc.bopts.SessionID
+		if v, ok := bc.localsSessionIDs[bctx.contextLocalName]; ok {
+			sessionID = v
+		}
 		st := llb.Local(bctx.contextLocalName,
-			llb.SessionID(bc.bopts.SessionID),
+			llb.SessionID(sessionID),
 			llb.FollowPaths([]string{DefaultDockerignoreName}),
 			llb.SharedKeyHint(bctx.contextLocalName+"-"+DefaultDockerignoreName),
 			WithInternalName("load "+DefaultDockerignoreName),

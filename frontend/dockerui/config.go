@@ -78,19 +78,12 @@ type Config struct {
 
 type Client struct {
 	Config
-<<<<<<< chore-buildkit-merge-v0.16.0-unresolved
-	client      client.Client
-	ignoreCache []string
-	g           flightcontrol.CachedGroup[*buildContext]
-	bctx        *buildContext // earth-specific: preset by SetBuildContext
-	bopts       client.BuildOpts
-=======
 	client           client.Client
 	ignoreCache      []string
 	g                flightcontrol.CachedGroup[*buildContext]
+	bctx             *buildContext // earth-specific: preset by SetBuildContext
 	bopts            client.BuildOpts
 	localsSessionIDs map[string]string
->>>>>>> v0.16.0
 
 	dockerignore     []byte
 	dockerignoreName string

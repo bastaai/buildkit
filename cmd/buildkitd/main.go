@@ -16,11 +16,6 @@ import (
 	"sync"
 	"time"
 
-<<<<<<< chore-buildkit-merge-v0.16.0-unresolved
-	"github.com/containerd/containerd/pkg/userns"
-=======
-	"github.com/containerd/containerd/defaults"
->>>>>>> v0.16.0
 	"github.com/containerd/containerd/remotes/docker"
 	"github.com/containerd/containerd/sys"
 	"github.com/containerd/platforms"

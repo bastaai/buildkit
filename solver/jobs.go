@@ -229,6 +229,20 @@ func (s *state) addJobs(srcState *state, memo map[*state]struct{}) {
 	}
 }
 
+// addJobsToOwners adds the jobs of s to the owner states of its merged edges and
+// their ancestors. Requires that Solver.mu is locked and s.mu is locked.
+func (s *state) addJobsToOwners() {
+	memo := map[*state]struct{}{s: {}}
+	for _, e := range s.edges {
+		for e.owner != nil {
+			e = e.owner
+			if ownerState, ok := s.solver.actives[e.edge.Vertex.Digest()]; ok {
+				ownerState.addJobs(s, memo)
+			}
+		}
+	}
+}
+
 func (s *state) combinedCacheManager() CacheManager {
 	s.mu.Lock()
 	cms := make([]CacheManager, 0, len(s.cache)+1)
@@ -516,6 +530,9 @@ func (jl *Solver) loadUnlocked(v, parent Vertex, j *Job, cache map[Vertex]Vertex
 	if j != nil {
 		if _, ok := st.jobs[j]; !ok {
 			st.jobs[j] = struct{}{}
+			// setEdge gave owners of st's merged edges only the jobs st had then; without
+			// j they can be deleted on Discard while j still routes through them.
+			st.addJobsToOwners()
 		}
 	} else {
 		dgstTrackerInst.add(dgst, "loadUnlocked-nil-job")

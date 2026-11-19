@@ -4121,7 +4121,9 @@ func TestLoadOntoMergedEdgeSurvivesOwnerDiscard(t *testing.T) {
 	require.NoError(t, err)
 	_, err = j1.Build(ctx, Edge{Vertex: v1})
 	require.NoError(t, err)
-	require.Contains(t, s.actives[v0.Digest()].jobs, j1)
+	// Map lookup, not require.Contains: deep-comparing a Job races with its progress goroutine.
+	_, ok := s.actives[v0.Digest()].jobs[j1]
+	require.True(t, ok)
 
 	// j2 loads v1 itself after the merge, so it lands on the merge source
 	j2, err := s.NewJob("job2")

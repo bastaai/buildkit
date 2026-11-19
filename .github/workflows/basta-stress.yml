@@ -58,18 +58,21 @@ jobs:
 
       # Failures land in the summary as a v2 result, not a harness error.
       - name: Unit tests
+        shell: bash
         run: |
+          set -o pipefail
           t='TestInputRequestForMissingEdgeRedispatch|TestMissingInputStateFailsBuild|TestLoadOntoMergedEdgeSurvivesOwnerDiscard'
           for mode in plain race; do
             flags=; [ $mode = race ] && flags=-race
-            if go test $flags ./solver/ -run "$t" -count=20 > "$OUT/unit-$mode.log" 2>&1; then
+            # Each missing-edge log line carries up to 10k tracker records; drop them or the log hits GBs.
+            if go test $flags ./solver/ -run "$t" -count=20 2>&1 | grep -v 'actives history' > "$OUT/unit-$mode.log"; then
               echo "- \`go test $flags -count=20\`: pass" >> "$OUT/unit.md"
             else
               echo "- \`go test $flags -count=20\`: **FAIL**" >> "$OUT/unit.md"
               echo "::error title=unit tests ($mode) failed::see unit-$mode.log"
             fi
           done
-          cat "$OUT"/unit-*.log
+          tail -n 40 "$OUT"/unit-*.log
 
       - name: Stress (stock)
         run: basta/stress/run.sh "$STOCK" stock-stress "$OUT" /tmp/stress $STRESS_FLAGS

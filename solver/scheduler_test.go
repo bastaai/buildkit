@@ -13,6 +13,7 @@ import (
 
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/session"
+	"github.com/moby/buildkit/util/cond"
 	digest "github.com/opencontainers/go-digest"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -4144,5 +4145,75 @@ func TestLoadOntoMergedEdgeSurvivesOwnerDiscard(t *testing.T) {
 	require.NoError(t, j2.Discard())
 	for _, v := range []Vertex{v0, v1, v2, depV0, depV1} {
 		require.NotContains(t, s.actives, v.Digest())
+	}
+}
+
+type missingEdgeFactory struct{}
+
+func (missingEdgeFactory) getEdge(Edge) *edge       { return nil }
+func (missingEdgeFactory) setEdge(Edge, *edge)      {}
+func (missingEdgeFactory) hasOwner(Edge, Edge) bool { return false }
+
+func TestInputRequestForMissingEdgeRedispatch(t *testing.T) {
+	// An input whose edge is gone gets a func request with no payload; a second
+	// pass before its failure is received must wait for it, not panic.
+	t.Parallel()
+
+	s := &scheduler{
+		waitq:    map[*edge]struct{}{},
+		incoming: map[*edge][]*edgePipe{},
+		outgoing: map[*edge][]*edgePipe{},
+		ef:       missingEdgeFactory{},
+	}
+	s.cond = cond.NewStatefulCond(&s.mu)
+
+	dep := vtxConst(1, vtxOpt{name: "dep"})
+	v := vtxAdd(2, vtxOpt{name: "v", inputs: []Edge{{Vertex: dep}}})
+	e := newEdge(Edge{Vertex: v}, nil, nil)
+	pf := &pipeFactory{s: s, e: e}
+
+	require.True(t, e.createInputRequests(edgeStatusComplete, pf, false))
+	require.NotNil(t, e.deps[0].req)
+	require.False(t, e.deps[0].req.Status().Completed)
+
+	require.NotPanics(t, func() {
+		require.False(t, e.createInputRequests(edgeStatusComplete, pf, false))
+	})
+	require.NotPanics(t, func() {
+		debugSchedulerPreUnpark(e, nil, nil, nil)
+	})
+
+	// the pending request still fails the edge once it is received
+	require.Eventually(t, func() bool {
+		return e.deps[0].req.Receive()
+	}, 5*time.Second, 10*time.Millisecond)
+	require.True(t, e.processUpdate(e.deps[0].req) || e.err != nil)
+	require.ErrorContains(t, e.err, "inconsistent graph state")
+}
+
+func TestMissingInputStateFailsBuild(t *testing.T) {
+	// With an input state gone from actives the build must fail with
+	// inconsistent graph state; the scheduler used to panic on redispatch.
+	t.Parallel()
+	ctx := context.TODO()
+
+	for i := 0; i < 100; i++ {
+		s := NewSolver(SolverOpt{ResolveOpFunc: testOpResolver})
+		depA := vtxConst(1, vtxOpt{})
+		depB := vtxConst(2, vtxOpt{})
+		v := vtxAdd(3, vtxOpt{inputs: []Edge{{Vertex: depA}, {Vertex: depB}}})
+
+		j, err := s.NewJob(identity.NewID())
+		require.NoError(t, err)
+		lv, err := s.load(v, nil, j)
+		require.NoError(t, err)
+		s.mu.Lock()
+		delete(s.actives, depA.Digest())
+		s.mu.Unlock()
+
+		_, err = s.s.build(ctx, Edge{Vertex: lv})
+		require.ErrorContains(t, err, "inconsistent graph state")
+		require.NoError(t, j.Discard())
+		s.Close()
 	}
 }

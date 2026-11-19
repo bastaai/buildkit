@@ -400,7 +400,9 @@ func debugSchedulerPreUnpark(e *edge, inc []pipe.Sender, updates, allPipes []pip
 	for i, dep := range e.deps {
 		des := edgeStatusInitial
 		if dep.req != nil {
-			des = dep.req.Request().(*edgeRequest).desiredState
+			if r, ok := dep.req.Request().(*edgeRequest); ok {
+				des = r.desiredState
+			}
 		}
 		log.Debugf(":: dep%d %s state=%s des=%s keys=%d hasslowcache=%v preprocessfunc=%v", i, e.edge.Vertex.Inputs()[i].Vertex.Name(), dep.state, des, len(dep.keys), e.slowCacheFunc(dep) != nil, e.preprocessFunc(dep) != nil)
 	}

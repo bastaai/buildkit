@@ -818,7 +818,9 @@ func (e *edge) createInputRequests(desiredState edgeStatusType, f *pipeFactory, 
 		if dep.state < desiredStateDep {
 			addNew := true
 			if dep.req != nil && !dep.req.Status().Completed {
-				if dep.req.Request().(*edgeRequest).desiredState != desiredStateDep {
+				// a missing input edge leaves a payload-less func request that will fail
+				// this edge with inconsistent graph state; wait for it instead of panicking
+				if r, ok := dep.req.Request().(*edgeRequest); ok && r.desiredState != desiredStateDep {
 					dep.req.Cancel()
 				} else {
 					addNew = false

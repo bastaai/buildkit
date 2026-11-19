@@ -1,0 +1,96 @@
+name: basta-stress
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: rounds-duration per stress arm
+        default: 8m
+  push:
+    branches:
+      - fix/merged-edge-owner-jobs-v2
+    paths:
+      - 'basta/**'
+      - 'solver/**'
+      - '.github/workflows/basta-stress.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: basta-stress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      STOCK: earthbuild/buildkitd:v0.8.18-b0385986
+      OUT: ${{ github.workspace }}/stress-out
+      STRESS_FLAGS: -rounds -rounds-duration ${{ inputs.duration || '8m' }} -workers 8 -per-build 2 -families 4 -sleep 1 -cancel-prob 0.4 -cancel-min 500ms -cancel-max 4s -stagger 250ms
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build v2 daemon image
+        run: |
+          docker buildx build -f basta/Dockerfile --build-arg REVISION=${{ github.sha }} --load -t bk:v2 .
+          docker pull -q "$STOCK"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: basta/stress/go.mod
+          cache-dependency-path: basta/stress/go.sum
+
+      - name: Build drivers
+        working-directory: basta/stress
+        run: |
+          go build -o /tmp/stress .
+          go build -o /tmp/abc ./abc
+          mkdir -p "$OUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21.13'
+          cache: false
+
+      # Failures land in the summary as a v2 result, not a harness error.
+      - name: Unit tests
+        run: |
+          t='TestInputRequestForMissingEdgeRedispatch|TestMissingInputStateFailsBuild|TestLoadOntoMergedEdgeSurvivesOwnerDiscard'
+          for mode in plain race; do
+            flags=; [ $mode = race ] && flags=-race
+            if go test $flags ./solver/ -run "$t" -count=20 > "$OUT/unit-$mode.log" 2>&1; then
+              echo "- \`go test $flags -count=20\`: pass" >> "$OUT/unit.md"
+            else
+              echo "- \`go test $flags -count=20\`: **FAIL**" >> "$OUT/unit.md"
+              echo "::error title=unit tests ($mode) failed::see unit-$mode.log"
+            fi
+          done
+          cat "$OUT"/unit-*.log
+
+      - name: Stress (stock)
+        run: basta/stress/run.sh "$STOCK" stock-stress "$OUT" /tmp/stress $STRESS_FLAGS
+
+      - name: Stress (v2)
+        run: basta/stress/run.sh bk:v2 v2-stress "$OUT" /tmp/stress $STRESS_FLAGS
+
+      - name: Gist A/B/C pattern (stock)
+        run: basta/stress/run.sh "$STOCK" stock-abc "$OUT" /tmp/abc -iters 20 -cancel 1800ms
+
+      - name: Gist A/B/C pattern (v2)
+        run: basta/stress/run.sh bk:v2 v2-abc "$OUT" /tmp/abc -iters 20 -cancel 1800ms
+
+      - name: Summary
+        if: always()
+        run: |
+          basta/stress/summary.sh "$OUT" "$OUT/unit.md" || echo "::error title=harness::summary failed"
+          cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stress-logs
+          path: stress-out/
